@@ -22,6 +22,7 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
 # 服务配置
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # 记忆配置
 MAX_HISTORY_MESSAGES = 20  # 滑动窗口大小（降级为兜底值，优先使用 token 预算装配）

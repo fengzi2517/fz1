@@ -5,6 +5,7 @@
 LLM 全部在事务外执行；事务失败则 job 重试，不产生半截状态（修 §3.1 蒸馏丢记忆）。
 """
 import asyncio
+import logging
 from typing import Dict, List, Optional
 
 from app.db import dumps, get_db, loads, now_iso
@@ -17,6 +18,8 @@ from app.services.memory_service import memory_service
 from app.store import store
 
 WORKER_POLL_INTERVAL = 2.0
+
+logger = logging.getLogger("app.distill")
 
 
 class DistillService:
@@ -42,6 +45,7 @@ class DistillService:
             store.reset_running_jobs()
             self._stop.clear()
             self._worker_task = asyncio.create_task(self._loop())
+            logger.info("蒸馏 worker 已启动（轮询 %ss）", WORKER_POLL_INTERVAL)
 
     async def stop_worker(self):
         self._stop.set()
@@ -51,6 +55,7 @@ class DistillService:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self._worker_task.cancel()
             self._worker_task = None
+            logger.info("蒸馏 worker 已停止")
 
     async def _loop(self):
         while not self._stop.is_set():
@@ -64,8 +69,14 @@ class DistillService:
             try:
                 await self.run_job(job)
                 store.finish_job(job["id"], ok=True)
+                logger.info("蒸馏完成 job=%s session=%s 区间=(%s,%s]",
+                            job["id"], job["session_id"],
+                            job["range_start"], job["range_end"])
             except Exception as e:
+                # 事务未提交 → 状态零污染；游标未推进，下次触发或巡检会重试
                 store.finish_job(job["id"], ok=False, error=str(e)[:300])
+                logger.exception("蒸馏失败 job=%s session=%s: %s",
+                                 job["id"], job["session_id"], e)
 
     # ---------- 核心管线 ----------
 

@@ -7,6 +7,7 @@
 - 关系状态注入（好感度/情绪），为表情差分与主动性提供依据
 - 轮换显式化：预算超限或跨天时开新会话并带走旧会话摘要（修 D4）
 """
+import logging
 import uuid
 from datetime import datetime
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
@@ -20,6 +21,9 @@ from app.models.schemas import ChatRequest
 from app.services.distill_service import distill_service
 from app.services.memory_service import memory_service
 from app.store import store
+
+
+logger = logging.getLogger("app.chat")
 
 SYSTEM_PROMPT_V2 = """你是一个专业的角色扮演AI。你需要严格遵循给定的角色设定进行对话。
 
@@ -200,6 +204,7 @@ class ChatService:
                 full_response += chunk
                 yield {"type": "token", "content": chunk, "session_id": session_id}
         except Exception as e:
+            logger.exception("单聊流式失败 session=%s", session_id)
             yield {"type": "error", "message": str(e)}
             return
 

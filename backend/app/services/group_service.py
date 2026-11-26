@@ -9,6 +9,7 @@
 - 成员上限可配、mute、加退群事件消息（P2-7）
 """
 import asyncio
+import logging
 import random
 from typing import AsyncGenerator, Dict, List, Optional
 
@@ -17,6 +18,9 @@ from app.core.textutil import tokenize
 from app.services.distill_service import distill_service
 from app.services.memory_service import memory_service
 from app.store import store
+
+
+logger = logging.getLogger("app.group")
 
 GROUP_HISTORY_WINDOW = 30
 GROUP_RECALL_TOP_K = 6
@@ -231,6 +235,8 @@ class GroupChatService:
                     yield {"type": "token", "content": chunk,
                            "character_id": member["id"], "name": member["name"]}
             except Exception as e:
+                logger.exception("群成员发言失败 group=%s character=%s",
+                                 group_id, member.get("id"))
                 yield {"type": "error", "message": f"{member['name']} 发言失败: {e}",
                        "character_id": member["id"]}
                 continue

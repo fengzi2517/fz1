@@ -9,6 +9,7 @@
 """
 import asyncio
 import json
+import logging
 import re
 from typing import AsyncGenerator, Dict, List, Optional
 
@@ -19,6 +20,8 @@ from app.config import (
     LLM_TEMPERATURE, LLM_MAX_TOKENS, DISTILL_MODEL,
     EMBED_BASE_URL, EMBED_API_KEY, EMBED_MODEL,
 )
+
+logger = logging.getLogger("app.llm")
 
 RETRY_STATUS = {429, 500, 502, 503}
 MAX_RETRIES = 3
@@ -95,8 +98,8 @@ class LLMGateway:
             parsed = msg.get("parsed") or extract_json(msg.get("content") or "")
             if parsed is not None:
                 return parsed
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("json_mode 不可用，退化为普通调用后抠取 JSON: %s", e)
         msg = await self.chat(messages, model=model or "distill", temperature=temperature)
         return extract_json(msg.get("content") or "") or (default or {})
 
@@ -135,7 +138,11 @@ class LLMGateway:
                     last_exc = e
                     attempt += 1
                     if attempt <= retries:
+                        logger.warning("流式调用失败（首 token 前）model=%s attempt=%s/%s: %s",
+                                       payload["model"], attempt, retries, e)
                         await asyncio.sleep(BACKOFF_BASE * (2 ** (attempt - 1)))
+                    elif len(plans) > idx + 1:
+                        logger.warning("主模型放弃，切换备用模型 %s", plans[idx + 1]["model"])
         raise last_exc or RuntimeError("LLM 流式调用失败")
 
     async def _stream_attempt(self, payload: dict) -> AsyncGenerator[str, None]:
@@ -185,12 +192,16 @@ class LLMGateway:
                     if resp.status_code in RETRY_STATUS:
                         last_err = httpx.HTTPStatusError(
                             f"HTTP {resp.status_code}", request=resp.request, response=resp)
+                        logger.warning("LLM %s 返回 %s，第 %s/%s 次重试",
+                                       m, resp.status_code, attempt + 1, MAX_RETRIES)
                         await asyncio.sleep(BACKOFF_BASE * (2 ** attempt))
                         continue
                     resp.raise_for_status()
                     return resp.json()
                 except httpx.TransportError as e:
                     last_err = e
+                    logger.warning("LLM %s 网络错误 %s，第 %s/%s 次重试",
+                                   m, type(e).__name__, attempt + 1, MAX_RETRIES)
                     await asyncio.sleep(BACKOFF_BASE * (2 ** attempt))
         raise last_err or RuntimeError("LLM 调用失败")
 

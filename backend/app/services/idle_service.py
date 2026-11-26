@@ -5,11 +5,14 @@
 - 蒸馏本身由 DistillService worker 异步执行（sleep-time 模式）
 """
 import asyncio
+import logging
 from typing import Dict
 
 from app.config import SESSION_IDLE_TIMEOUT
 from app.db import get_db
 from app.services.distill_service import distill_service
+
+logger = logging.getLogger("app.idle")
 
 
 class IdleSweeper:
@@ -39,16 +42,16 @@ class IdleSweeper:
                 group += 1
             else:
                 chat += 1
+        if chat or group:
+            logger.info("闲置巡检入队：单聊 %s、群聊 %s", chat, group)
         return {"chat": chat, "group": group}
 
     async def run_forever(self):
         while True:
             try:
-                result = self.sweep_once()
-                if result["chat"] or result["group"]:
-                    print(f"[IdleSweeper] 入队：单聊 {result['chat']}、群聊 {result['group']}")
-            except Exception as e:
-                print(f"[IdleSweeper] 巡检失败: {e}")
+                self.sweep_once()
+            except Exception:
+                logger.exception("闲置巡检失败（循环继续）")
             await asyncio.sleep(self.check_interval)
 
     def start(self):

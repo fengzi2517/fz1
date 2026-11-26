@@ -25,3 +25,8 @@ Thumbs.db
 
 # 日志
 *.log
+
+# 覆盖率产物
+.coverage
+.coverage.*
+htmlcov/

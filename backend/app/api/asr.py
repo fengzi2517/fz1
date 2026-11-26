@@ -2,9 +2,10 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.config import DATA_DIR, ensure_dir
+from app.core.security import current_user
 from app.services.asr_service import AsrUnavailableError, asr_service
 
 router = APIRouter(prefix="/api/asr", tags=["asr"])
@@ -19,7 +20,8 @@ async def asr_status():
 
 
 @router.post("/transcribe")
-async def transcribe(file: UploadFile = File(...), language: str = ""):
+async def transcribe(file: UploadFile = File(...), language: str = "",
+                     user_id: str = Depends(current_user)):
     """上传 WAV（16k 单声道）并返回识别文本"""
     if not asr_service.available:
         raise HTTPException(status_code=503, detail="后端语音识别未配置")

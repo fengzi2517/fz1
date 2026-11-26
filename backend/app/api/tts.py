@@ -1,7 +1,8 @@
 """语音合成 API - 返回 mp3 音频流，App 用原生播放器直接播放"""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
+from app.core.security import current_user
 from app.services.tts_service import TtsUnavailableError, tts_service
 
 router = APIRouter(prefix="/api/tts", tags=["tts"])
@@ -22,6 +23,7 @@ async def tts_speech(
     text: str = Query(..., min_length=1),
     voice: str = "",
     speed: float = 0.0,
+    user_id: str = Depends(current_user),
 ):
     """合成语音，返回 audio/mpeg"""
     try:

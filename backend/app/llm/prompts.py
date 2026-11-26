@@ -157,3 +157,115 @@ GROUP_MEMORY_EXTRACT_PROMPT = """你正在扮演「{character_name}」。以下�
 - 只提取值得长期记住的内容，忽略琐碎寒暄
 - 三条列表没有内容就返回空列表
 """
+
+# ========== 升级新增（docs/upgrade/03_升级方案.md）==========
+
+# 记忆冲突消解 Prompt（mem0 式 ADD/UPDATE/DELETE/NOOP）
+RESOLVE_MEMORY_PROMPT = """你是记忆管理模块。请把「新记忆」与「已有相似记忆」对照，决定如何维护长期记忆库。
+
+## 新记忆（{scope} 范围）
+{new_content}
+
+## 已有相似记忆
+{similar}
+
+## 输出格式（严格 JSON）
+{{
+  "action": "ADD | UPDATE | DELETE | NOOP | MERGE",
+  "target_ids": [被 UPDATE/DELETE/MERGE 需要操作的已有记忆 id 列表],
+  "final_content": "写入后的最终记忆内容（ADD/UPDATE/MERGE 时给出；NOOP/DELETE 可留空）",
+  "importance": 0.0,
+  "reason": "一句话理由"
+}}
+
+## 决策规则
+- 新记忆与已有记忆事实矛盾（偏好改变、关系变化、约定取消）：UPDATE 或 DELETE 旧条目，保留最新事实
+- 新记忆是已有记忆的细节补充：MERGE（合并为一条更完整的表述，删除被覆盖的旧条目）
+- 全新信息：ADD
+- 与已有记忆语义重复、无新信息：NOOP
+- importance 0~1：偏好/约定/关系/重要事件取高值，琐碎信息取低值
+"""
+
+# 用户画像自我更新（修 write_user_profile 无调用方的断链）
+PROFILE_UPDATE_PROMPT = """请根据「当前用户画像」与「最近会话摘要」，输出更新后的用户画像。
+
+## 当前用户画像
+{profile}
+
+## 最近会话摘要
+{summary}
+
+## 输出格式（严格 JSON）
+{{
+  "profile": "更新后的完整画像（markdown，150 字以内，含：称呼/重要背景/偏好/关系状态）",
+  "changed": true
+}}
+
+## 规则
+- 只根据摘要中有依据的信息更新，不得臆测
+- 画像矛盾时以更新的信息为准
+- 无新信息时原样返回且 changed=false
+"""
+
+# 群聊导演（可选 LLM supervisor 调度）
+GROUP_SUPERVISOR_PROMPT = """你是群聊导演。根据群聊内容决定本轮哪些角色应该发言。
+
+## 群成员
+{members}
+
+## 最近的群聊
+{recent}
+
+## 用户刚说的话
+{message}
+
+## 输出格式（严格 JSON）
+{{
+  "speakers": ["应发言角色名，按发言顺序，0~{max_speakers} 个；没人需要发言则为空数组"]
+}}
+
+## 规则
+- 被 @ 或点名追问的角色必须发言
+- 与该话题无关、刚连续发过言的角色保持沉默
+- 纯寒暄或用户只对某一人说话时，只选 1 人
+"""
+
+# 角色关系/情绪状态更新（驱动表情与主动性）
+RELATION_UPDATE_PROMPT = """你扮演「{character_name}」。根据本轮对话更新你对用户的内在状态。
+
+## 当前状态
+好感度 {affinity}（0~1），情绪 {emotion}，关系阶段 {stage}
+
+## 本轮对话
+{turn}
+
+## 输出格式（严格 JSON）
+{{
+  "affinity": 0.0,
+  "emotion": "happy|sad|angry|shy|surprised|neutral|worried|affectionate",
+  "stage": "stranger|acquaintance|close|intimate|conflict",
+  "note": "一句话说明变化原因"
+}}
+"""
+
+# 主动消息时机引擎（借鉴 jiwen 漂移轴）
+PROACTIVE_PROMPT = """你是「{character_name}」的内心时钟。距离用户上次互动已 {idle_hours} 小时。
+
+## 当前内在状态
+{state}
+
+## 近期记忆
+{memories}
+
+## 输出格式（严格 JSON）
+{{
+  "should_send": true,
+  "reason": "一句话",
+  "topic": "想聊什么/惦记什么",
+  "tone": "语气"
+}}
+
+## 规则
+- 想念、惦记未回复的事、有意义的见闻都可以发起；但避免连环轰炸
+- 用户明确说过忙/睡觉/不需要打扰时，should_send=false
+"""

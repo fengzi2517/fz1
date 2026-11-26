@@ -1,14 +1,42 @@
-"""FastAPI 应用入口"""
+"""FastAPI 应用入口 v2：lifespan 统一启停（P0-4）"""
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, characters, memory, groups, asr, tts, conversations
-from app.config import HOST, PORT, DATA_DIR, IDLE_SWEEP_INTERVAL
+from app.api import (
+    asr, auth, characters, chat, conversations, groups, memory, tts)
+from app.config import (
+    AUTH_ENABLED, DATA_DIR, DB_PATH, HOST, IDLE_SWEEP_INTERVAL, PORT)
+from app.db import get_db
+from app.services.distill_service import distill_service
 from app.services.idle_service import IdleSweeper
+from app.store import store
+import app.db as db_module
 
-app = FastAPI(title="AI 角色扮演聊天工具", version="0.1.0")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+logger = logging.getLogger("app")
 
-# CORS 配置（开发阶段允许所有来源）
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    get_db()  # 惰性建库建表
+    logger.info("数据库: %s | 鉴权: %s", DB_PATH, "开" if AUTH_ENABLED else "关(开发模式)")
+    distill_service.start_worker()
+    sweeper = IdleSweeper(check_interval=IDLE_SWEEP_INTERVAL)
+    sweeper.start()
+    yield
+    await sweeper.stop()
+    await distill_service.stop_worker()
+    db_module.get_db().close()
+
+
+app = FastAPI(title="AI 角色扮演聊天工具", version="2.0.0", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,7 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册路由
+app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(characters.router)
 app.include_router(memory.router)
@@ -27,30 +55,14 @@ app.include_router(tts.router)
 app.include_router(conversations.router)
 
 
-_sweeper = IdleSweeper(check_interval=IDLE_SWEEP_INTERVAL)
-
-
-@app.on_event("startup")
-async def startup():
-    """启动时确保数据目录存在，并启动闲置会话巡检"""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"[Startup] 数据目录: {DATA_DIR}")
-    _sweeper.start()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    await _sweeper.stop()
-
-
 @app.get("/")
 async def root():
-    return {"status": "running", "service": "AI Roleplay Chat"}
+    return {"status": "running", "service": "AI Roleplay Chat", "version": "2.0.0"}
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "distill_jobs": store.jobs_pending()}
 
 
 if __name__ == "__main__":

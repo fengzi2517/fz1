@@ -12,7 +12,7 @@ class Message(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    user_id: str
+    user_id: str = ""
     character_id: str
     session_id: Optional[str] = None
     message: str
@@ -22,7 +22,7 @@ class ChatRequest(BaseModel):
 
 
 class CharacterCreate(BaseModel):
-    user_id: str
+    user_id: str = ""
     name: str
     raw_content: str  # 用户粘贴/导入的原始人设文本
 
@@ -42,7 +42,7 @@ class CharacterProfile(BaseModel):
 
 
 class EndSessionRequest(BaseModel):
-    user_id: str
+    user_id: str = ""
     character_id: str
     session_id: str
 
@@ -57,7 +57,7 @@ class RecallResult(BaseModel):
 # ========== M2 群聊 ==========
 
 class GroupCreate(BaseModel):
-    user_id: str
+    user_id: str = ""
     name: str
     character_ids: List[str]
 
@@ -77,10 +77,10 @@ class GroupProfile(BaseModel):
 
 
 class GroupChatRequest(BaseModel):
-    user_id: str
+    user_id: str = ""   # 鉴权模式下由 token 决定，保留字段仅用于 AUTH_ENABLED=false 开发模式
     message: str
-    # 发言控制：round_robin=全员轮流回应；target=只让指定角色回应
-    reply_mode: Literal["round_robin", "target"] = "round_robin"
+    # 发言控制：auto=智能调度(提及+健谈度)；all=全员轮转(旧 round_robin)；target=指定角色
+    reply_mode: Literal["auto", "all", "target", "round_robin"] = "auto"
     target_character_id: Optional[str] = None
 
 
@@ -90,3 +90,46 @@ class GroupMessage(BaseModel):
     character_id: Optional[str] = None
     name: str = ""
     timestamp: Optional[datetime] = None
+
+
+# ========== 升级新增 ==========
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=32)
+    password: str = Field(min_length=6, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class GroupMemberIn(BaseModel):
+    user_id: str = ""
+    character_id: str
+
+
+class GroupMuteRequest(BaseModel):
+    user_id: str = ""
+    muted_ids: List[str] = []
+
+
+class MessageUpdate(BaseModel):
+    content: str
+
+
+class SwipeRequest(BaseModel):
+    active: int = 0
+
+
+class SessionBranchRequest(BaseModel):
+    message_id: int
+    title: str = ""
+
+
+class CharacterCreateV2(BaseModel):
+    user_id: str = ""
+    name: str
+    raw_content: str
+    nickname: str = ""
+    talkativeness: int = Field(50, ge=0, le=100)

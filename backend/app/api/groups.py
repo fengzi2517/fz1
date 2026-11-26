@@ -1,117 +1,146 @@
-"""群聊相关 API（M2）"""
+"""群聊 API v2（P2）：CRUD + 成员/静音/公告/调度配置 + SSE 与 WebSocket（支持插话）"""
 import asyncio
-import json
-from typing import List, Optional
+from typing import Optional
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    HTTPException,
-    WebSocket,
-    WebSocketDisconnect,
-)
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
-from app.models.schemas import GroupCreate, GroupChatRequest, GroupProfile
-from app.services.group_service import (
-    group_service,
-    group_chat_service,
-    group_distill_service,
-)
+from app.api.sse import sse_response
+from app.config import AUTH_ENABLED
+from app.core.security import UserDep, decode_token, validate_id
+from app.models.schemas import GroupChatRequest, GroupCreate, GroupMemberIn, GroupMuteRequest
+from app.services.distill_service import distill_service
+from app.services.group_service import group_chat_service, group_service
+from app.store import store
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
 
 
-@router.post("", response_model=GroupProfile)
-async def create_group(request: GroupCreate):
-    """创建群聊"""
+class GroupUpdate(BaseModel):
+    name: str = ""
+    announcement: str = ""
+    summary: Optional[str] = None
+    scheduler: Optional[dict] = None
+
+
+@router.post("")
+async def create_group(request: GroupCreate, user_id: str = UserDep):
     try:
-        return await group_service.create_group(
-            request.user_id, request.name, request.character_ids
-        )
+        return group_service.create_group(user_id, request.name, request.character_ids)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(400, str(e))
 
 
-@router.get("", response_model=List[GroupProfile])
-async def list_groups(user_id: str):
-    """获取用户的群聊列表"""
-    return await group_service.list_groups(user_id)
+@router.get("")
+async def list_groups(user_id: str = UserDep):
+    return group_service.list_groups(user_id)
 
 
-@router.get("/{group_id}", response_model=GroupProfile)
-async def get_group(user_id: str, group_id: str):
-    group = await group_service.get_group(user_id, group_id)
+@router.get("/{group_id}")
+async def get_group(group_id: str, user_id: str = UserDep):
+    group = group_service.get_group(user_id, group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="群聊不存在")
+        raise HTTPException(404, "群聊不存在")
     return group
 
 
+@router.put("/{group_id}")
+async def update_group(group_id: str, request: GroupUpdate, user_id: str = UserDep):
+    try:
+        group_service._require(user_id, group_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    fields = {}
+    if request.name:
+        fields["name"] = request.name
+    if request.announcement:
+        fields["announcement"] = request.announcement
+    if request.summary is not None:
+        fields["summary"] = request.summary
+    if request.scheduler is not None:
+        fields["scheduler"] = request.scheduler
+    if fields:
+        store.update_group(user_id, group_id, **fields)
+    return store.get_group(user_id, group_id)
+
+
 @router.delete("/{group_id}")
-async def delete_group(user_id: str, group_id: str):
-    success = await group_service.delete_group(user_id, group_id)
-    return {"success": success}
+async def delete_group(group_id: str, user_id: str = UserDep):
+    return {"success": group_service.delete_group(user_id, group_id)}
+
+
+@router.post("/{group_id}/members")
+async def add_member(group_id: str, request: GroupMemberIn, user_id: str = UserDep):
+    try:
+        return group_service.add_member(user_id, group_id, request.character_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/{group_id}/members/{character_id}")
+async def remove_member(group_id: str, character_id: str, user_id: str = UserDep):
+    try:
+        return group_service.remove_member(user_id, group_id, character_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/{group_id}/mute")
+async def set_muted(group_id: str, request: GroupMuteRequest, user_id: str = UserDep):
+    try:
+        return group_service.set_muted(user_id, group_id, request.muted_ids)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/{group_id}/history")
-async def get_group_history(user_id: str, group_id: str, limit: int = 50):
-    """获取群聊历史消息"""
-    messages = await group_service.get_history(user_id, group_id, limit=limit)
-    return {"messages": messages}
-
-
-@router.post("/{group_id}/end")
-async def end_group_chat(
-    group_id: str,
-    user_id: str,
-    background_tasks: BackgroundTasks,
-):
-    """结束群聊，触发按角色视角的记忆蒸馏"""
-    background_tasks.add_task(
-        group_distill_service.distill_group, user_id, group_id
-    )
-    return {"status": "distilling", "group_id": group_id}
+async def get_group_history(group_id: str, user_id: str = UserDep, limit: int = 200):
+    group = group_service.get_group(user_id, group_id)
+    if not group or not group.get("session_id"):
+        raise HTTPException(404, "群聊不存在")
+    return {"group_id": group_id, "session_id": group["session_id"],
+            "messages": store.get_messages(group["session_id"], limit=limit)}
 
 
 @router.post("/{group_id}/chat")
-async def group_chat(group_id: str, request: GroupChatRequest):
-    """群聊发言：成员依次流式回复"""
-    async def event_generator():
-        try:
-            async for event in group_chat_service.chat_stream(
-                request.user_id,
-                group_id,
-                request.message,
-                reply_mode=request.reply_mode,
-                target_character_id=request.target_character_id,
-            ):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            data = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
-            yield f"data: {data}\n\n"
+async def group_chat(group_id: str, request: GroupChatRequest, user_id: str = UserDep):
+    """群聊发言（SSE）。round_robin 兼容映射为 all"""
+    mode = {"round_robin": "all"}.get(request.reply_mode, request.reply_mode)
+    return sse_response(group_chat_service.chat_stream(
+        user_id, group_id, request.message,
+        reply_mode=mode, target_character_id=request.target_character_id))
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+
+@router.post("/{group_id}/end")
+async def end_group_chat(group_id: str, user_id: str = UserDep):
+    group = group_service.get_group(user_id, group_id)
+    if not group or not group.get("session_id"):
+        raise HTTPException(404, "群聊不存在")
+    job_id = distill_service.request(user_id, group["session_id"], "group")
+    return {"status": "queued" if job_id else "up_to_date", "group_id": group_id,
+            "job_id": job_id}
+
+
+def _ws_user(websocket: WebSocket, token: str, user_id: str) -> Optional[str]:
+    if AUTH_ENABLED:
+        uid = decode_token(token or "")
+        return uid
+    return user_id or None
 
 
 @router.websocket("/{group_id}/ws")
-async def group_chat_ws(websocket: WebSocket, group_id: str, user_id: str):
-    """
-    群聊 WebSocket：与 SSE 事件协议一致，额外支持用户中途插话。
+async def group_chat_ws(websocket: WebSocket, group_id: str,
+                        token: str = Query(""), user_id: str = Query("")):
+    """群聊 WebSocket：与 SSE 事件协议一致，额外支持用户中途插话（打断半截话标记 interrupted）"""
+    uid = _ws_user(websocket, token, user_id)
+    if not uid:
+        await websocket.close(code=4401)
+        return
+    validate_id(group_id, "group_id")
+    if not group_service.get_group(uid, group_id):
+        await websocket.close(code=4404)
+        return
 
-    客户端发送：
-      {"type": "message", "content": "...", "reply_mode": "round_robin|target",
-       "target_character_id": "c_xxx"}
-      {"type": "ping"}
-    服务端推送：start / token / done / interrupted / error / end / pong
-    """
     await websocket.accept()
     send_lock = asyncio.Lock()
     state: dict = {"task": None, "interrupt": asyncio.Event()}
@@ -123,13 +152,8 @@ async def group_chat_ws(websocket: WebSocket, group_id: str, user_id: str):
     async def run_round(message: str, reply_mode: str, target: Optional[str]):
         try:
             async for event in group_chat_service.chat_stream(
-                user_id,
-                group_id,
-                message,
-                reply_mode=reply_mode,
-                target_character_id=target,
-                interrupt_event=state["interrupt"],
-            ):
+                    uid, group_id, message, reply_mode=reply_mode,
+                    target_character_id=target, interrupt_event=state["interrupt"]):
                 await send(event)
         except Exception as e:
             await send({"type": "error", "message": f"群聊生成失败: {e}"})
@@ -138,7 +162,6 @@ async def group_chat_ws(websocket: WebSocket, group_id: str, user_id: str):
         while True:
             data = await websocket.receive_json()
             msg_type = data.get("type")
-
             if msg_type == "ping":
                 await send({"type": "pong"})
                 continue
@@ -150,20 +173,19 @@ async def group_chat_ws(websocket: WebSocket, group_id: str, user_id: str):
             if not content:
                 continue
 
+            mode = {"round_robin": "all"}.get(
+                data.get("reply_mode", "auto"), data.get("reply_mode", "auto"))
             running = state["task"]
             if running is not None and not running.done():
-                # 插话：先让当前轮尽快收尾，再处理这条新消息
                 state["interrupt"].set()
-                await running
+                try:
+                    await asyncio.wait_for(asyncio.shield(running), timeout=10)
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    pass
 
             state["interrupt"] = asyncio.Event()
             state["task"] = asyncio.create_task(
-                run_round(
-                    content,
-                    data.get("reply_mode", "round_robin"),
-                    data.get("target_character_id"),
-                )
-            )
+                run_round(content, mode, data.get("target_character_id")))
     except WebSocketDisconnect:
         pass
     finally:

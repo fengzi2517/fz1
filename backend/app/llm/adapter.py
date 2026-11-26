@@ -74,7 +74,8 @@ class LLMGateway:
         tools: Optional[List[Dict]] = None,
         json_mode: bool = False,
     ) -> Dict:
-        payload = self._payload(messages, model, temperature, max_tokens, tools)
+        payload = self._payload(messages, model, temperature, max_tokens, tools,
+                                stream=False)
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         data = await self._post_with_retry(payload)
@@ -156,13 +157,14 @@ class LLMGateway:
 
     # ---------- 内部 ----------
 
-    def _payload(self, messages, model, temperature, max_tokens, tools) -> dict:
+    def _payload(self, messages, model, temperature, max_tokens, tools,
+                 stream: bool = True) -> dict:
         payload = {
             "model": _resolve_model(model),
             "messages": messages,
             "temperature": temperature if temperature is not None else LLM_TEMPERATURE,
             "max_tokens": max_tokens or LLM_MAX_TOKENS,
-            "stream": True,
+            "stream": stream,
         }
         if tools:
             payload["tools"] = tools

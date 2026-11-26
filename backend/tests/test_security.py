@@ -1,4 +1,9 @@
 """P0-1 鉴权与安全校验测试"""
+import os
+import stat
+import subprocess
+import sys
+
 import pytest
 from fastapi import HTTPException
 
@@ -104,3 +109,42 @@ class TestApiAuth:
         r = client.post("/api/auth/login",
                         json={"username": "newbie", "password": "abcdef"})
         assert r.status_code == 200
+
+
+class TestAuthSecretFile:
+    """回归：真机冒烟发现签名密钥按进程 umask 落盘（0664），同组用户可伪造任意 token"""
+
+    BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    CODE = (
+        "import os, sys\n"
+        "os.environ['DATA_DIR'] = sys.argv[1]\n"
+        "os.environ['AUTH_ENABLED'] = 'true'\n"
+        "os.environ.pop('AUTH_SECRET', None)\n"
+        "import app.config as c\n"
+        "print(c.AUTH_SECRET)\n"
+    )
+
+    def boot(self, tmp_path):
+        r = subprocess.run([sys.executable, "-c", self.CODE, str(tmp_path)],
+                           capture_output=True, text=True, cwd=self.BACKEND,
+                           timeout=60, env=os.environ)
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip()
+
+    def mode(self, tmp_path):
+        return stat.S_IMODE(os.stat(tmp_path / "auth_secret.key").st_mode)
+
+    def test_generated_secret_is_owner_only(self, tmp_path):
+        secret = self.boot(tmp_path)
+        assert len(secret) == 64
+        assert self.mode(tmp_path) == 0o600
+        assert (tmp_path / "auth_secret.key").read_text().strip() == secret
+
+    def test_loose_existing_secret_is_tightened(self, tmp_path):
+        (tmp_path / "auth_secret.key").write_text("legacy-secret-value")
+        os.chmod(tmp_path / "auth_secret.key", 0o644)
+        assert self.boot(tmp_path) == "legacy-secret-value"  # 复用旧值，不重新生成
+        assert self.mode(tmp_path) == 0o600
+
+    def test_restart_reuses_same_secret(self, tmp_path):
+        assert self.boot(tmp_path) == self.boot(tmp_path)

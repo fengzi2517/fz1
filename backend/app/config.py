@@ -43,14 +43,22 @@ AUTH_SECRET = os.getenv("AUTH_SECRET", "")
 AUTH_TOKEN_TTL = int(os.getenv("AUTH_TOKEN_TTL", "604800"))  # 7 天
 if AUTH_ENABLED and not AUTH_SECRET:
     # 首次启动自动生成并持久化随机密钥
+    import os as _os
     _secret_file = DATA_DIR / "auth_secret.key"
     if _secret_file.exists():
         AUTH_SECRET = _secret_file.read_text().strip()
+        try:
+            _os.chmod(_secret_file, 0o600)  # 收紧历史版本按默认 umask 写下的密钥
+        except OSError:
+            pass
     else:
         import secrets as _secrets
         _secret_file.parent.mkdir(parents=True, exist_ok=True)
         AUTH_SECRET = _secrets.token_hex(32)
-        _secret_file.write_text(AUTH_SECRET)
+        # write_text() 沿用进程 umask（0002 时得到 0664），同组用户读到签名密钥即可伪造任意用户 token
+        with _os.fdopen(_os.open(_secret_file, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL, 0o600),
+                        "w") as f:
+            f.write(AUTH_SECRET)
 
 # 数据库（升级后真相源；Markdown 文件降级为导出/审计视图）
 DB_PATH = Path(os.getenv("DB_PATH", str(DATA_DIR / "roleplay.db"))).resolve()

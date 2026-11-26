@@ -42,6 +42,7 @@ build/
 .screenshots/
 .idea/
 .playwright-cli/
+.workbuddy/
 
 # 大型本地模型文件（可执行文件保留）
 /tools/whisper/*.bin

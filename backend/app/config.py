@@ -24,6 +24,20 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
+# 跨域：默认放开来源但不下发 cookie 凭证（token 走 Authorization 头）
+CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
+CORS_ALLOW_ORIGIN_LIST = [o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+
+# 指标端点：需同时打开开关并配置随机 token，否则 /metrics 返回 404
+METRICS_ENABLED = os.getenv("METRICS_ENABLED", "false").lower() != "false"
+METRICS_TOKEN = os.getenv("METRICS_TOKEN", "")
+
+# 内容安全（P0-5）
+MODERATION_ENABLED = os.getenv("MODERATION_ENABLED", "true").lower() != "false"
+MODERATION_LLM = os.getenv("MODERATION_LLM", "false").lower() == "true"
+MINOR_MODE = os.getenv("MINOR_MODE", "false").lower() == "true"
+MODERATION_LEXICON_PATH = os.getenv("MODERATION_LEXICON_PATH", "")
+
 # 记忆配置
 MAX_HISTORY_MESSAGES = 20  # 滑动窗口大小（降级为兜底值，优先使用 token 预算装配）
 RECALL_TOP_K = 10  # recall 返回条目数

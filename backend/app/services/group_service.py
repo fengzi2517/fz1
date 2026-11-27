@@ -14,6 +14,7 @@ import random
 from typing import AsyncGenerator, Dict, List, Optional
 
 from app.config import GROUP_MEMBER_LIMIT, GROUP_SPEAKERS_PER_ROUND, GROUP_PARALLEL_REPLY
+from app.core.guard import moderate_input, refusal_for
 from app.core.textutil import tokenize
 from app.services.distill_service import distill_service
 from app.services.memory_service import memory_service
@@ -183,6 +184,17 @@ class GroupChatService:
         user_turns = store.group_total_user_turns(sid)  # 本轮之前的全局轮次（修 G2）
         store.append_message(sid, "user", message, name="用户")
 
+        verdict = await moderate_input(message)
+        if verdict["action"] != "allow":
+            logger.info("群聊输入被审核拦截 group=%s category=%s",
+                        group_id, verdict["category"])
+            text = refusal_for(verdict)
+            store.append_message(sid, "assistant", text, name="内容安全",
+                                 flags={"guard": verdict["category"]})
+            yield {"type": "token", "content": text, "name": "内容安全"}
+            yield {"type": "end", "scheduled": [], "moderated": verdict["category"]}
+            return
+
         cfg = group.get("scheduler") or {}
         mode = reply_mode if reply_mode in ("auto", "all", "target") else cfg.get("mode", "auto")
         picked = self.scheduler.pick(
@@ -235,8 +247,8 @@ class GroupChatService:
                     yield {"type": "token", "content": chunk,
                            "character_id": member["id"], "name": member["name"]}
             except Exception as e:
-                logger.exception("群成员发言失败 group=%s character=%s",
-                                 group_id, member.get("id"))
+                logger.exception("群成员发言失败 session=%s character=%s",
+                                 sid, member.get("id"))
                 yield {"type": "error", "message": f"{member['name']} 发言失败: {e}",
                        "character_id": member["id"]}
                 continue

@@ -20,6 +20,7 @@ from app.config import (
     LLM_TEMPERATURE, LLM_MAX_TOKENS, DISTILL_MODEL,
     EMBED_BASE_URL, EMBED_API_KEY, EMBED_MODEL,
 )
+from app.core.metrics import metrics
 
 logger = logging.getLogger("app.llm")
 
@@ -100,6 +101,7 @@ class LLMGateway:
                 return parsed
         except Exception as e:
             logger.debug("json_mode 不可用，退化为普通调用后抠取 JSON: %s", e)
+            metrics.observe_llm("json_degraded")
         msg = await self.chat(messages, model=model or "distill", temperature=temperature)
         return extract_json(msg.get("content") or "") or (default or {})
 
@@ -137,12 +139,15 @@ class LLMGateway:
                         raise
                     last_exc = e
                     attempt += 1
+                    metrics.observe_llm("errors")
                     if attempt <= retries:
                         logger.warning("流式调用失败（首 token 前）model=%s attempt=%s/%s: %s",
                                        payload["model"], attempt, retries, e)
+                        metrics.observe_llm("retries")
                         await asyncio.sleep(BACKOFF_BASE * (2 ** (attempt - 1)))
                     elif len(plans) > idx + 1:
                         logger.warning("主模型放弃，切换备用模型 %s", plans[idx + 1]["model"])
+                        metrics.observe_llm("fallback")
         raise last_exc or RuntimeError("LLM 流式调用失败")
 
     async def _stream_attempt(self, payload: dict) -> AsyncGenerator[str, None]:
@@ -187,6 +192,9 @@ class LLMGateway:
             p = dict(payload)
             p["model"] = m
             for attempt in range(MAX_RETRIES):
+                metrics.observe_llm("calls")
+                if m != payload["model"] and attempt == 0:
+                    metrics.observe_llm("fallback")
                 try:
                     resp = await self.client.post("/chat/completions", json=p)
                     if resp.status_code in RETRY_STATUS:
@@ -194,6 +202,9 @@ class LLMGateway:
                             f"HTTP {resp.status_code}", request=resp.request, response=resp)
                         logger.warning("LLM %s 返回 %s，第 %s/%s 次重试",
                                        m, resp.status_code, attempt + 1, MAX_RETRIES)
+                        metrics.observe_llm("errors")
+                        if attempt + 1 < MAX_RETRIES:
+                            metrics.observe_llm("retries")
                         await asyncio.sleep(BACKOFF_BASE * (2 ** attempt))
                         continue
                     resp.raise_for_status()
@@ -202,6 +213,9 @@ class LLMGateway:
                     last_err = e
                     logger.warning("LLM %s 网络错误 %s，第 %s/%s 次重试",
                                    m, type(e).__name__, attempt + 1, MAX_RETRIES)
+                    metrics.observe_llm("errors")
+                    if attempt + 1 < MAX_RETRIES:
+                        metrics.observe_llm("retries")
                     await asyncio.sleep(BACKOFF_BASE * (2 ** attempt))
         raise last_err or RuntimeError("LLM 调用失败")
 

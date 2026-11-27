@@ -6,9 +6,10 @@ LLM 全部在事务外执行；事务失败则 job 重试，不产生半截状�
 """
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from app.db import dumps, get_db, loads, now_iso
+from app.core.metrics import metrics
+from app.db import dumps, get_db, now_iso
 from app.llm.adapter import llm_adapter
 from app.llm.prompts import (
     SUMMARY_PROMPT, EXTRACT_MEMORY_PROMPT, GROUP_MEMORY_EXTRACT_PROMPT,
@@ -69,12 +70,14 @@ class DistillService:
             try:
                 await self.run_job(job)
                 store.finish_job(job["id"], ok=True)
+                metrics.observe_distill(True)
                 logger.info("蒸馏完成 job=%s session=%s 区间=(%s,%s]",
                             job["id"], job["session_id"],
                             job["range_start"], job["range_end"])
             except Exception as e:
                 # 事务未提交 → 状态零污染；游标未推进，下次触发或巡检会重试
                 store.finish_job(job["id"], ok=False, error=str(e)[:300])
+                metrics.observe_distill(False)
                 logger.exception("蒸馏失败 job=%s session=%s: %s",
                                  job["id"], job["session_id"], e)
 
@@ -226,7 +229,6 @@ class DistillService:
         user_id = sess["user_id"]
         with get_db().transaction() as conn:
             header = "## 群聊概要" if kind == "group" else "## 会话摘要"
-            field = "summary"
             if kind == "group":
                 row = conn.execute("SELECT summary FROM groups WHERE id=?",
                                    (plan["group_id"],)).fetchone()

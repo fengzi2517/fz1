@@ -45,6 +45,18 @@ class TestChatStreamBasics:
         msgs = store.get_messages(sid)
         assert msgs[1]["role"] == "assistant" and msgs[1]["name"] == "小美"
 
+    async def test_speaker_llm_failure_reports_error(self, group, fake_llm):
+        """回归：异常日志曾引用未定义的名字，NameError 会盖掉 error 事件让前端只见流断开"""
+        uid, cs, gid, sid = group
+        fake_llm.stream_error = RuntimeError("上游 503")
+        events = [e async for e in GroupChatService().chat_stream(
+            uid, gid, "大家好", reply_mode="all")]
+        errs = [e for e in events if e["type"] == "error"]
+        assert len(errs) == 2 and all("上游 503" in e["message"] for e in errs)
+        assert all(e.get("character_id") in (cs["c1"], cs["c2"]) for e in errs)
+        assert events[-1]["type"] == "end"
+        assert store.count_messages(sid) == 1          # 只有用户那句，失败不落半截话
+
     async def test_all_mode_sequential_both_speak(self, group, fake_llm):
         uid, cs, gid, sid = group
         events = [e async for e in GroupChatService().chat_stream(
@@ -140,7 +152,6 @@ class TestPrivateView:
         store.set_relation(uid, cs["c1"], affinity=0.9, emotion="开心")
         svc = GroupChatService()
         member = store.get_character(uid, cs["c1"])
-        msgs, _ = [], {}
         built = await svc._build_member_messages(
             uid, member, "上次吃辣的事", {"summary": "", "older": [],
                                          "announcement": "校园背景", "history": []},

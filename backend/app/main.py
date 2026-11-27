@@ -1,14 +1,19 @@
-"""FastAPI 应用入口 v2：lifespan 统一启停（P0-4）"""
+"""FastAPI 应用入口 v2：lifespan 统一启停 + request_id/指标中间件（P0-4）"""
+import hmac
 import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     asr, auth, characters, chat, conversations, groups, memory, tts)
 from app.config import (
-    AUTH_ENABLED, DATA_DIR, DB_PATH, HOST, IDLE_SWEEP_INTERVAL, LOG_LEVEL, PORT)
+    AUTH_ENABLED, CORS_ALLOW_ORIGIN_LIST, DATA_DIR, DB_PATH, HOST,
+    IDLE_SWEEP_INTERVAL, LOG_LEVEL, METRICS_ENABLED, METRICS_TOKEN, PORT)
+from app.core.metrics import metrics
+from app.core.trace import RequestIdFilter, new_request_id, request_id_var
 from app.db import get_db
 from app.services.distill_service import distill_service
 from app.services.idle_service import IdleSweeper
@@ -23,7 +28,8 @@ def setup_logging(level: str = LOG_LEVEL) -> int:
     if not any(getattr(h, "_app_fmt", False) for h in root.handlers):
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+            "%(asctime)s %(levelname)s [%(name)s] [%(request_id)s] %(message)s"))
+        handler.addFilter(RequestIdFilter())
         handler._app_fmt = True
         root.addHandler(handler)
     root.setLevel(resolved)
@@ -55,13 +61,42 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI 角色扮演聊天工具", version="2.0.0", lifespan=lifespan)
 
+# 凭证走 Authorization: Bearer，不用 cookie —— 关掉 allow_credentials，
+# 否则任意站点带着用户 cookie 就能读到响应（P0-1 CORS 收敛）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ALLOW_ORIGIN_LIST,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def trace_and_metrics(request: Request, call_next):
+    """request_id 贯穿 + 每路由耗时/状态计数。
+
+    SSE 端点的耗时是"到响应头"的时间，不含整段流式输出。
+    """
+    rid = request.headers.get("x-request-id") or new_request_id()
+    token = request_id_var.set(rid)
+    started = time.perf_counter()
+    status = 500
+    try:
+        try:
+            response = await call_next(request)
+            status = response.status_code
+        finally:
+            route = getattr(request.scope.get("route"), "path", request.url.path)
+            metrics.observe_request(request.method, route, status,
+                                    (time.perf_counter() - started) * 1000)
+            request_id_var.reset(token)
+        response.headers["X-Request-ID"] = rid
+        return response
+    except Exception:
+        logger.exception("未捕获异常 %s %s", request.method, request.url.path)
+        raise
+
 
 app.include_router(auth.router)
 app.include_router(chat.router)
@@ -81,6 +116,17 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok", "distill_jobs": store.jobs_pending()}
+
+
+@app.get("/metrics")
+async def metrics_endpoint(request: Request):
+    """运维指标。默认关闭；METRICS_TOKEN 未配置时即使开关打开也不暴露。"""
+    if not METRICS_ENABLED or not METRICS_TOKEN:
+        raise HTTPException(status_code=404)
+    given = request.headers.get("x-metrics-token") or request.query_params.get("token")
+    if not given or not hmac.compare_digest(str(given), METRICS_TOKEN):
+        raise HTTPException(status_code=401)
+    return metrics.snapshot()
 
 
 if __name__ == "__main__":

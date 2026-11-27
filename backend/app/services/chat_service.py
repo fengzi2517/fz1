@@ -8,7 +8,6 @@
 - 轮换显式化：预算超限或跨天时开新会话并带走旧会话摘要（修 D4）
 """
 import logging
-import uuid
 from datetime import datetime
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -16,6 +15,8 @@ from app.config import (
     CTX_WINDOW_TOKENS, CTX_BUDGET_PROFILE, CTX_BUDGET_SUMMARY, CTX_BUDGET_RECALL,
     CTX_BUDGET_HISTORY_MIN, MAX_HISTORY_MESSAGES, LLM_MAX_TOKENS, SESSION_MAX_MESSAGES,
 )
+from app.core.guard import check_text, moderate_input, refusal_for
+from app.core.metrics import metrics
 from app.core.textutil import estimate_tokens
 from app.models.schemas import ChatRequest
 from app.services.distill_service import distill_service
@@ -195,6 +196,19 @@ class ChatService:
         session_id = session["id"]
 
         store.append_message(session_id, "user", request.message, name="用户")
+
+        verdict = await moderate_input(request.message)
+        if verdict["action"] != "allow":
+            logger.info("输入被审核拦截 session=%s category=%s hits=%s",
+                        session_id, verdict["category"], verdict["hits"])
+            text = refusal_for(verdict)
+            store.append_message(session_id, "assistant", text,
+                                 flags={"guard": verdict["category"]})
+            yield {"type": "token", "content": text, "session_id": session_id}
+            yield {"type": "done", "session_id": session_id, "rotated": rotated,
+                   "moderated": verdict["category"], "context_stats": {}}
+            return
+
         messages, stats = await self.build_messages(
             user_id, character_id, session_id, request.message)
 
@@ -208,8 +222,22 @@ class ChatService:
             yield {"type": "error", "message": str(e)}
             return
 
+        out = check_text(full_response)
+        if out["action"] != "allow":
+            # 已经流出去的内容用替换事件兜底，落库存替换后的文本（不污染后续上下文）
+            metrics.observe_guard("output_blocked")
+            logger.info("输出被审核替换 session=%s category=%s",
+                        session_id, out["category"])
+            text = refusal_for(out)
+            store.append_message(session_id, "assistant", text,
+                                 flags={"guard": "output_" + out["category"]})
+            yield {"type": "replace", "content": text, "session_id": session_id}
+            yield {"type": "done", "session_id": session_id, "rotated": rotated,
+                   "moderated": "output_" + out["category"], "context_stats": stats}
+            return
+
         if full_response.strip():
-            mid = store.append_message(session_id, "assistant", full_response)
+            store.append_message(session_id, "assistant", full_response)
             # 攒够一段就蒸馏（sleep-time worker 异步执行，不阻塞对话）
             if store.count_messages(session_id) - session["distilled_upto"] >= 12:
                 distill_service.request(user_id, session_id, "chat")

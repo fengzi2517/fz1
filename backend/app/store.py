@@ -1,5 +1,5 @@
 """DAO 层：所有 SQLite 读写集中于此（服务层不直接写 SQL）"""
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from app.core.textutil import estimate_tokens, tokenize
 from app.db import Database, dumps, get_db, loads, now_iso

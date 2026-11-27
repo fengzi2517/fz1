@@ -1,7 +1,7 @@
 """鉴权 API（P0-1）"""
 from fastapi import APIRouter, HTTPException
 
-from app.core.security import create_token, hash_password, validate_id, verify_password
+from app.core.security import create_token, hash_password, verify_password
 from app.models.schemas import LoginRequest, RegisterRequest
 from app.store import store
 

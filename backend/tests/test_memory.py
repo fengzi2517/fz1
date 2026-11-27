@@ -1,7 +1,7 @@
 """P1-3/P1-4/P1-5 记忆引擎测试：混合召回 + 冲突消解 + 块上限 + 导出"""
 import pytest
 
-from app.services.memory_service import ACTIVE_ENTRY_LIMIT, memory_service
+from app.services.memory_service import memory_service
 from app.store import store
 
 

@@ -3,11 +3,8 @@
 修 01 文档 §6.8：旧版 LLM 解析后丢弃原始文本、编辑再解析是有损往返。
 新版 card_json 永远保留原始 raw_content 与解析结果，profile_md 仅为注入视图。
 """
-import json
-from datetime import datetime
 from typing import List, Optional
 
-from app.core.security import new_id
 from app.llm.adapter import llm_adapter
 from app.llm.prompts import PARSE_CHARACTER_PROMPT
 from app.store import store

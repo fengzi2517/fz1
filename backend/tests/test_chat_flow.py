@@ -76,7 +76,6 @@ class TestChatStream:
         assert [m["role"] for m in msgs] == ["user"]  # 无假回复入库
 
     async def test_distill_triggered_after_threshold(self, setup, fake_llm):
-        from app.config import SESSION_MAX_MESSAGES
         uid, cid = setup
         sid = store.create_session(uid, "char", character_id=cid)
         for i in range(12):

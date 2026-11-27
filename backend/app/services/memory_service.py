@@ -8,7 +8,6 @@
 - 召回账本防复读（G5）
 - 用户画像闭环（P1-1，write_user_profile 终于有调用方了）
 """
-from datetime import datetime
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel
@@ -16,8 +15,8 @@ from pydantic import BaseModel
 from app.config import (
     RECALL_VEC_THRESHOLD, RECALL_INJECT_TOP_K, RECALL_KEYWORD_OVERLAP_THRESHOLD,
 )
-from app.core.textutil import bm25_score, cosine, day_decay, estimate_tokens, tokenize
-from app.db import dumps, get_db, now_iso
+from app.core.textutil import bm25_score, cosine, day_decay, tokenize
+from app.db import get_db, now_iso
 from app.llm.adapter import llm_adapter
 from app.llm.prompts import RESOLVE_MEMORY_PROMPT
 from app.store import store

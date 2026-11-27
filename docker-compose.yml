@@ -1,0 +1,17 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      # 覆盖 .env 里的本机路径：容器内数据库落在命名卷，重建镜像不丢数据
+      DATA_DIR: /data
+    env_file:
+      - path: ./backend/.env
+        required: false
+    volumes:
+      - rp_data:/data
+    restart: unless-stopped
+
+volumes:
+  rp_data:

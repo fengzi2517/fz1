@@ -1,6 +1,5 @@
 """语音合成服务 - 硅基流动 MOSS-TTSD（OpenAI 兼容 /audio/speech）"""
 import hashlib
-from pathlib import Path
 
 import httpx
 

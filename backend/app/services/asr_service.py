@@ -4,7 +4,6 @@
 这里提供后端识别兜底：App 录 WAV 上传，后端转文字后返回。
 """
 import asyncio
-import os
 from pathlib import Path
 
 import httpx

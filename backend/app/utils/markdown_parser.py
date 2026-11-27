@@ -2,7 +2,7 @@
 import re
 from datetime import date, datetime
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 import yaml
 
 

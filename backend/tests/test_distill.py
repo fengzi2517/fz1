@@ -86,7 +86,7 @@ class TestRunJob:
         fake_llm.chat_content = "   "  # 摘要为空 → 抛错
         for i in range(3):
             store.append_message(sid, "user" if i % 2 == 0 else "assistant", f"x{i}")
-        jid = distill_service.request(uid, sid, "chat")
+        distill_service.request(uid, sid, "chat")
         job = store.claim_job()
         with pytest.raises(RuntimeError):
             await distill_service.run_job(job)
